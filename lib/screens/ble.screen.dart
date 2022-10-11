@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue/flutter_blue.dart';
 import 'package:o2ring/crc8.dart';
+import 'package:o2ring/oxy_manager.dart';
 
 class BleScreen extends StatefulWidget {
   final BluetoothDevice device;
@@ -16,6 +17,8 @@ class BleScreen extends StatefulWidget {
 }
 
 class _BleScreenState extends State<BleScreen> {
+  int mtuSize = 20;
+
   Guid service = Guid('14839ac4-7d7e-415c-9a42-167340cf2339');
   Guid writeCharacteristic = Guid('8B00ACE7-EB0B-49B0-BBE9-9AEE0A26E1A3');
   Guid readCharacteristic = Guid('0734594A-A8E7-4B1A-A6B1-CD5243059A57');
@@ -27,14 +30,26 @@ class _BleScreenState extends State<BleScreen> {
 
   List<int> response = [];
 
-  sendCommand(Int8List bytes) {
-    print(bytes);
-    response = [];
-    _writeChar!.write(bytes, withoutResponse: true);
+  String? lastFileName;
+
+  late OxyManager manager;
+  bool initialized = false;
+
+  initialize() async {
+    initialized = false;
+    manager = OxyManager(widget.device);
+    await manager.initialize();
+    initialized = true;
+  }
+
+  getInfo() {
+    manager.getInfo();
   }
 
   @override
   Widget build(BuildContext context) {
+    initialize();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Device'),
@@ -42,47 +57,15 @@ class _BleScreenState extends State<BleScreen> {
       body: Column(
         children: [
           TextButton(
-            child: Text('iniciar notificações'),
-            onPressed: () async {
-              await widget.device.requestMtu(185);
-              if (subscription != null) {
-                subscription!.cancel();
-              }
-              List<BluetoothService> services =
-                  await widget.device.discoverServices();
-              var service = services
-                  .firstWhere((element) => element.uuid == this.service);
-              _writeChar = service.characteristics
-                  .firstWhere((element) => element.uuid == writeCharacteristic);
-              _notifyChar = service.characteristics
-                  .firstWhere((element) => element.uuid == readCharacteristic);
-
-              if (!_notifyChar!.isNotifying) {
-                _notifyChar!.setNotifyValue(true);
-              }
-
-              subscription = _notifyChar!.value.listen((event) {
-                response.addAll(event);
-              });
-            },
-          ),
-          TextButton(
+            onPressed: getInfo,
             child: const Text('informações'),
-            onPressed: () {
-              Int8List bytes = Int8List(8);
-              bytes[0] = 0xAA;
-              bytes[1] = 0x14;
-              bytes[2] = ~0x14;
-              bytes[7] = Crc8.convert(bytes);
-              sendCommand(bytes);
-            },
           ),
           TextButton(
             child: const Text('definir horário'),
             onPressed: () {
-              var json = {"SetTIME": "2022-10-05,17:28:00"};
-              var chars = jsonEncode(json).codeUnits;
-              var size = chars.length;
+              var json = {"SetTIME": "2022-10-05,09:30:00"};
+              List<int> chars = jsonEncode(json).codeUnits;
+              int size = chars.length;
 
               Int8List bytes = Int8List(8 + size);
               bytes[0] = 0xAA;
@@ -96,30 +79,35 @@ class _BleScreenState extends State<BleScreen> {
               }
 
               bytes[7 + size] = Crc8.convert(bytes);
-              sendCommand(bytes);
+              // sendCommand(bytes);
             },
           ),
           TextButton(
               child: Text('iniciar leitura'),
               onPressed: () {
-                String filename = '20220521151715';
-                int len = filename.length;
+                if (lastFileName == null) {
+                  print('last file name is null');
+                  return;
+                }
 
-                Int8List bytes = Int8List(8);
+                List<int> filename = lastFileName!.codeUnits;
+                int length = filename.length + 1;
+
+                Int8List bytes = Int8List(8 + length);
                 bytes[0] = 0xAA;
                 bytes[1] = 0x03;
                 bytes[2] = ~0x03;
                 bytes[5] = 0;
                 bytes[6] = 0;
 
-                /*for (int i = 0; i < len - 1; i++) {
-                  bytes[7 + i] = 0;
-                }*/
+                for (int i = 0; i < length - 1; i++) {
+                  bytes[7 + i] = filename.elementAt(i);
+                }
 
                 bytes[bytes.length - 1] = Crc8.convert(bytes);
 
                 print('aqui');
-                sendCommand(bytes);
+                // sendCommand(bytes);
                 print('ali');
               }),
           TextButton(
@@ -137,13 +125,24 @@ class _BleScreenState extends State<BleScreen> {
               bytes[2] = ~0x05;
               bytes[7] = Crc8.convert(bytes);
 
-              sendCommand(bytes);
+              // sendCommand(bytes);
             },
           ),
           TextButton(
             child: const Text('foo bar'),
             onPressed: () {
-              print('foo');
+              print(manager.response);
+              /*OxyResponse oxyResponse = OxyResponse(response);
+              String encodedJson = String.fromCharCodes(oxyResponse.content);
+              int jsonEnd = encodedJson.lastIndexOf('}');
+              String content = encodedJson.substring(0, jsonEnd + 1);
+              var decodedJson = jsonDecode(content);
+              List<String> fileList = decodedJson['FileList'].split(',');
+              if (fileList.isNotEmpty) {
+                lastFileName = fileList.lastWhere((element) => element != '');
+              }
+              print('último arquivo: ${lastFileName}');
+              print(decodedJson);*/
             },
           )
         ],
