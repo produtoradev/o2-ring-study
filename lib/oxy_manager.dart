@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_blue/flutter_blue.dart';
 import 'package:o2ring/crc8.dart';
+import 'package:o2ring/oxy_response.dart';
 
 enum OxyCommand {
   cmdGetFileStart(0x03),
@@ -29,6 +30,7 @@ class OxyManager {
   List<int> response = [];
 
   late BluetoothDevice device;
+  late Function(OxyResponse) onDone;
   late BluetoothCharacteristic writeCharacteristic;
   late BluetoothCharacteristic readCharacteristic;
 
@@ -36,13 +38,9 @@ class OxyManager {
 
   StreamSubscription<List<int>>? subscription;
 
-  OxyManager(this.device);
+  OxyManager(this.device, this.onDone);
 
   initialize() async {
-    if (subscription != null) {
-      subscription!.cancel();
-    }
-
     List<BluetoothService> services = await device.discoverServices();
     BluetoothService service =
         services.firstWhere((element) => element.uuid == serviceGuid);
@@ -57,10 +55,25 @@ class OxyManager {
 
     subscription = readCharacteristic.value.listen((event) {
       response.addAll(event);
+      if (response.elementAt(0) != 0x55) {
+        response.clear();
+      } else {
+        try {
+          OxyResponse oxyResponse = OxyResponse(response);
+          if (oxyResponse.isValid) {
+            onDone(oxyResponse);
+            subscription!.cancel();
+          }
+        } catch (exception) {
+          subscription!.cancel();
+        }
+      }
     });
   }
 
   sendCommand(OxyCommand command, List<int> bytes) {
+    response.clear();
+
     List<List<int>> byteList = [];
     int times = (bytes.length / mtuSize).ceil();
     for (int index = 0; index < times; index++) {
@@ -69,7 +82,7 @@ class OxyManager {
       List<int> currentBytes = remainingBytes.take(mtuSize).toList();
       byteList.add(currentBytes);
     }
-    response = [];
+
     byteList.forEach((element) {
       writeCharacteristic.write(element, withoutResponse: true);
     });

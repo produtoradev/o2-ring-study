@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue/flutter_blue.dart';
 import 'package:o2ring/crc8.dart';
 import 'package:o2ring/oxy_manager.dart';
+import 'package:o2ring/oxy_response.dart';
 
 class BleScreen extends StatefulWidget {
   final BluetoothDevice device;
@@ -32,33 +33,60 @@ class _BleScreenState extends State<BleScreen> {
 
   String? lastFileName;
 
-  late OxyManager manager;
   bool initialized = false;
 
-  initialize() async {
-    initialized = false;
-    manager = OxyManager(widget.device);
-    await manager.initialize();
-    initialized = true;
+  getInfo() async {
+    OxyManager mManager = OxyManager(widget.device, (OxyResponse oxyResponse) {
+      print(oxyResponse.json);
+    });
+    await mManager.initialize();
+    mManager.getInfo();
   }
 
-  getInfo() {
-    manager.getInfo();
+  readLastFile() async {
+    OxyManager mManager = OxyManager(widget.device, (oxyResponse) {
+      print(oxyResponse);
+    });
+    await mManager.initialize();
+  }
+
+  getLastFileName() async {
+    OxyManager mManager = OxyManager(widget.device, (oxyResponse) {
+      List<String> fileNameList = oxyResponse.json['FileList'].split(',');
+      fileNameList.remove('');
+      setState(() => lastFileName = fileNameList.last);
+    });
+    await mManager.initialize();
+    mManager.getInfo();
+  }
+
+  disconnectDevice() async {
+    await widget.device.disconnect();
+    Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    initialize();
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Device'),
       ),
       body: Column(
         children: [
+          Center(
+            child: Text('$lastFileName'),
+          ),
           TextButton(
             onPressed: getInfo,
             child: const Text('informações'),
+          ),
+          TextButton(
+            onPressed: readLastFile,
+            child: const Text('ler aquivo'),
+          ),
+          TextButton(
+            onPressed: disconnectDevice,
+            child: const Text('desconectar'),
           ),
           TextButton(
             child: const Text('definir horário'),
@@ -131,7 +159,6 @@ class _BleScreenState extends State<BleScreen> {
           TextButton(
             child: const Text('foo bar'),
             onPressed: () {
-              print(manager.response);
               /*OxyResponse oxyResponse = OxyResponse(response);
               String encodedJson = String.fromCharCodes(oxyResponse.content);
               int jsonEnd = encodedJson.lastIndexOf('}');
