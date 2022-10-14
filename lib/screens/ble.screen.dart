@@ -5,8 +5,9 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue/flutter_blue.dart';
 import 'package:o2ring/crc8.dart';
+import 'package:o2ring/oxy_data_file.dart';
+import 'package:o2ring/oxy_file.dart';
 import 'package:o2ring/oxy_manager.dart';
-import 'package:o2ring/oxy_response.dart';
 
 class BleScreen extends StatefulWidget {
   final BluetoothDevice device;
@@ -35,29 +36,106 @@ class _BleScreenState extends State<BleScreen> {
 
   bool initialized = false;
 
-  getInfo() async {
-    OxyManager mManager = OxyManager(widget.device, (OxyResponse oxyResponse) {
-      print(oxyResponse.json);
+  var responseFromOxymeter;
+
+  int fileSize = 0;
+  OxyFile? currentFile;
+
+  late OxyManager oxyManager;
+
+  bool loading = false;
+
+  @override
+  initState() {
+    setState(() => loading = true);
+    oxyManager = OxyManager(widget.device);
+    oxyManager.initialize().then((_) {
+      setState(() => loading = false);
+    });
+  }
+
+  getInfo() {
+    print('getInfo');
+    oxyManager.onDone = (oxyResponse) {
+      oxyManager.clearTimeout();
+      oxyResponse.getInformation();
+      print('oxyResponse ${oxyResponse.json}');
+    };
+    oxyManager.getInfo();
+  }
+
+  readFile() async {
+    /*OxyManager mManager = OxyManager(widget.device, (oxyResponse) {
+      print('continuando: ${oxyResponse.content}');
+      currentFile!.addContent(oxyResponse.content);
+      if (currentFile!.index < currentFile!.fileSize) {
+        print('index: ${currentFile!.index}');
+        print('fileSize: ${currentFile!.fileSize}');
+        readFile();
+      } else {
+        print('ACABOU, É TETRA ${currentFile!.fileContent}');
+      }
     });
     await mManager.initialize();
-    mManager.getInfo();
+    mManager.continueReadingFile(currentFile!.packageNumber);*/
   }
 
   readLastFile() async {
-    OxyManager mManager = OxyManager(widget.device, (oxyResponse) {
-      print(oxyResponse);
-    });
-    await mManager.initialize();
+    if (lastFileName == null) {
+      getLastFileName();
+    } else {
+      oxyManager.onDone = (oxyResponse) {
+        oxyManager.clearTimeout();
+        oxyResponse.startToReadFile();
+        setState(() {
+          fileSize = oxyResponse.toUInt(oxyResponse.content);
+          responseFromOxymeter = 'O tamanho do arquivo é: $fileSize';
+          currentFile = OxyFile(lastFileName!, fileSize);
+          readFileContent(0);
+        });
+      };
+      oxyManager.readFile(lastFileName!);
+    }
   }
 
   getLastFileName() async {
-    OxyManager mManager = OxyManager(widget.device, (oxyResponse) {
+    oxyManager.onDone = (oxyResponse) {
+      oxyManager.clearTimeout();
+      oxyResponse.getInformation();
       List<String> fileNameList = oxyResponse.json['FileList'].split(',');
       fileNameList.remove('');
       setState(() => lastFileName = fileNameList.last);
-    });
-    await mManager.initialize();
-    mManager.getInfo();
+      readLastFile();
+    };
+    oxyManager.getInfo();
+  }
+
+  readFileContent(int packageNumber) {
+    oxyManager.onDone = (oxyResponse) {
+      oxyManager.clearTimeout();
+      currentFile!.addContent(oxyResponse.content);
+      int index = currentFile!.index;
+      int fileSize = currentFile!.fileSize;
+      print('read file: ${currentFile!.fileName} => ${index} / ${fileSize}');
+
+      if (index < fileSize) {
+        readFileContent(packageNumber + 1);
+      } else {
+        readFileEnd();
+      }
+    };
+    oxyManager.continueReadingFile(packageNumber);
+  }
+
+  readFileEnd() {
+    oxyManager.onDone = (oxyResponse) {
+      oxyManager.clearTimeout();
+      print('read file finished');
+      print(currentFile!.fileContent);
+      OxyDataFile oxyDataFile = OxyDataFile(currentFile!.fileContent);
+      currentFile = null;
+    };
+    oxyManager.endFileRead();
   }
 
   disconnectDevice() async {
@@ -65,16 +143,19 @@ class _BleScreenState extends State<BleScreen> {
     Navigator.of(context).pop();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Device'),
-      ),
-      body: Column(
+  Widget loadBody() {
+    if (loading) {
+      return Center(
+        child: Text('Carregando...'),
+      );
+    } else {
+      return Column(
         children: [
           Center(
             child: Text('$lastFileName'),
+          ),
+          Center(
+            child: Text('$responseFromOxymeter'),
           ),
           TextButton(
             onPressed: getInfo,
@@ -173,7 +254,17 @@ class _BleScreenState extends State<BleScreen> {
             },
           )
         ],
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Device'),
       ),
+      body: loadBody(),
     );
   }
 }

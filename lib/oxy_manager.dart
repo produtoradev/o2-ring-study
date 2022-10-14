@@ -6,6 +6,7 @@ import 'package:o2ring/crc8.dart';
 import 'package:o2ring/oxy_response.dart';
 
 enum OxyCommand {
+  cmdIdle(0x00),
   cmdGetFileStart(0x03),
   cmdGetFileData(0x04),
   cmdGetFileEnd(0x05),
@@ -38,7 +39,13 @@ class OxyManager {
 
   StreamSubscription<List<int>>? subscription;
 
-  OxyManager(this.device, this.onDone);
+  OxyCommand currentCommand = OxyCommand.cmdIdle;
+
+  Timer? timeout;
+
+  OxyManager(this.device);
+
+  // OxyManager(this.device, this.onDone);
 
   initialize() async {
     List<BluetoothService> services = await device.discoverServices();
@@ -58,22 +65,15 @@ class OxyManager {
       if (response.elementAt(0) != 0x55) {
         response.clear();
       } else {
-        try {
-          OxyResponse oxyResponse = OxyResponse(response);
-          if (oxyResponse.isValid) {
-            onDone(oxyResponse);
-            subscription!.cancel();
-          }
-        } catch (exception) {
-          subscription!.cancel();
+        OxyResponse oxyResponse = OxyResponse(currentCommand, response);
+        if (oxyResponse.isValid) {
+          onDone(oxyResponse);
         }
       }
     });
   }
 
-  sendCommand(OxyCommand command, List<int> bytes) {
-    response.clear();
-
+  __sendCommand(List<int> bytes) {
     List<List<int>> byteList = [];
     int times = (bytes.length / mtuSize).ceil();
     for (int index = 0; index < times; index++) {
@@ -88,6 +88,26 @@ class OxyManager {
     });
   }
 
+  sendCommand(OxyCommand command, List<int> bytes) {
+    if (currentCommand != OxyCommand.cmdIdle) {
+      print('sorry... I\'m busy');
+      // busy
+      return;
+    }
+
+    currentCommand = command;
+    response.clear();
+
+    __sendCommand(bytes);
+    timeout = Timer(const Duration(seconds: 3), () {
+      if (currentCommand == OxyCommand.cmdParaSync) {
+        currentCommand = OxyCommand.cmdIdle;
+      } else {
+        currentCommand = OxyCommand.cmdIdle;
+      }
+    });
+  }
+
   getInfo() {
     Int8List bytes = Int8List(8);
     bytes[0] = 0xAA;
@@ -95,5 +115,54 @@ class OxyManager {
     bytes[2] = ~0x14;
     bytes[7] = Crc8.convert(bytes);
     sendCommand(OxyCommand.cmdGetDeviceInfo, bytes);
+  }
+
+  readFile(String filename) {
+    List<int> filenameCharCodes = filename.codeUnits;
+    int length = filenameCharCodes.length + 1;
+
+    Int8List bytes = Int8List(8 + length);
+    bytes[0] = 0xAA;
+    bytes[1] = 0x03;
+    bytes[2] = ~0x03;
+    bytes[5] = length;
+    bytes[6] = (length >> 8);
+
+    for (int index = 0; index < length - 1; index++) {
+      bytes[7 + index] = filenameCharCodes.elementAt(index);
+    }
+
+    bytes[bytes.length - 1] = Crc8.convert(bytes);
+
+    sendCommand(OxyCommand.cmdGetFileStart, bytes);
+  }
+
+  continueReadingFile(int packageNumber) {
+    Int8List bytes = Int8List(8);
+    bytes[0] = 0xAA;
+    bytes[1] = 0x04;
+    bytes[2] = ~0x04;
+    bytes[3] = packageNumber;
+    bytes[4] = packageNumber >> 8;
+
+    bytes[7] = Crc8.convert(bytes);
+
+    sendCommand(OxyCommand.cmdGetFileData, bytes);
+  }
+
+  endFileRead() {
+    Int8List bytes = Int8List(8);
+    bytes[0] = 0xAA;
+    bytes[1] = 0x05;
+    bytes[2] = ~0x05;
+    bytes[7] = Crc8.convert(bytes);
+
+    sendCommand(OxyCommand.cmdGetFileStart, bytes);
+  }
+
+  clearTimeout() {
+    currentCommand = OxyCommand.cmdIdle;
+    timeout?.cancel();
+    timeout = null;
   }
 }
